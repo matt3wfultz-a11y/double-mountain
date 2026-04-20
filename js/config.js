@@ -6,12 +6,13 @@ const G = {
   WALL_X: 240,       // center x of dividing wall
   WALL_W: 36,        // wall thickness in pixels
 
-  GRAVITY: 900,
-  JUMP_VY: -560,     // vertical velocity on jump
-  MOVE_VX: 170,      // horizontal speed on jump
+  CLIMB_SPEED: 130,  // starting auto-scroll speed (px/s)
+  SCROLL_ACCEL: 2.5, // acceleration (px/s²)
+  SCROLL_MAX: 290,   // max scroll speed
+  STUN_GRAVITY: 750, // downward accel while stunned
+  MOVE_VX: 200,      // lateral speed on tap
 
-  TETHER_Y_MAX: 240, // max Y-distance before tether tugs trailing player
-  TETHER_PULL: 280,  // upward force applied to trailing player when taut
+  TETHER_Y_MAX: 200, // max Y-distance before tether snaps trailing player up
 
   TILE: 32,
   WORLD_H: 12000,

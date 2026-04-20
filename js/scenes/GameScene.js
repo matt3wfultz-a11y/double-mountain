@@ -9,13 +9,14 @@ class GameScene extends Phaser.Scene {
   create() {
     const { W, WORLD_H } = G;
 
-    this.gameOver   = false;
-    this.startTime  = this.time.now;
-    this.difficulty = 0; // 0-4 index into G.DIFF
+    this.gameOver    = false;
+    this.startTime   = this.time.now;
+    this.difficulty  = 0;
+    this.scrollSpeed = G.CLIMB_SPEED; // pixels/s; accelerates over time
 
-    // Physics world spans the full height
+    // Physics world spans the full height; gravity handled manually
     this.physics.world.setBounds(0, 0, W, WORLD_H);
-    this.physics.world.gravity.y = G.GRAVITY;
+    this.physics.world.gravity.y = 0;
 
     // Layer order: bg → wall → platforms → players → tether → ui
     this._buildBackground();
@@ -49,10 +50,9 @@ class GameScene extends Phaser.Scene {
     // Tether graphics (drawn above world objects)
     this.tetherGfx = this.add.graphics().setDepth(20);
 
-    // Camera
+    // Camera starts at the bottom, auto-scrolls upward each frame
     this.cameras.main.setBounds(0, 0, W, WORLD_H);
-    this._camY = startY;
-    this.cameras.main.scrollY = startY - G.H * 0.6;
+    this.cameras.main.scrollY = WORLD_H - G.H;
 
     // Input
     this._setupInput();
@@ -238,9 +238,9 @@ class GameScene extends Phaser.Scene {
   }
 
   _maybeGenerate() {
-    const camTop = this.cameras.main.scrollY;
-    if (camTop < this._nextPlatformY + G.H * 1.8) {
-      this._generatePlatforms(this._nextPlatformY, G.H * 2.5);
+    // Generate a fresh batch whenever the camera is within 1.5 screens of the last batch top
+    if (this.cameras.main.scrollY < this._nextPlatformY + G.H * 1.5) {
+      this._generatePlatforms(this._nextPlatformY, G.H * 2);
     }
   }
 
@@ -283,17 +283,27 @@ class GameScene extends Phaser.Scene {
       p.stunTimer -= dt;
       if (p.stunTimer <= 0) { p.stunned = false; s.setAlpha(1); }
       else { s.setAlpha(Math.sin(p.stunTimer * 20) * 0.4 + 0.6); }
+
+      // Manual gravity while falling after hit
+      s.body.velocity.y = Math.min(s.body.velocity.y + G.STUN_GRAVITY * dt, 600);
+    } else {
+      // Endless-runner auto-climb: lock upward speed to scroll rate
+      s.body.velocity.y = -this.scrollSpeed;
     }
 
-    // Clamp to own side
+    // Clamp to own lane
     if (s.x < p.minX) { s.x = p.minX; s.body.velocity.x = Math.max(0, s.body.velocity.x); }
     if (s.x > p.maxX) { s.x = p.maxX; s.body.velocity.x = Math.min(0, s.body.velocity.x); }
 
-    // Ground state
-    p.grounded = s.body.blocked.down;
+    // Horizontal friction
+    s.body.velocity.x *= Math.pow(0.80, dt * 60);
 
-    // Slight horizontal damping when on ground
-    if (p.grounded) s.body.velocity.x *= 0.78;
+    // Rescue: player has fallen below camera bottom
+    const camBottom = this.cameras.main.scrollY + G.H + 60;
+    if (s.y > camBottom) {
+      s.y = camBottom - 30;
+      if (!p.stunned) { p.stunned = true; p.stunTimer = 0.6; }
+    }
   }
 
   // ─── input ──────────────────────────────────
@@ -301,57 +311,45 @@ class GameScene extends Phaser.Scene {
   _setupInput() {
     const { WALL_X, W } = G;
 
-    // Touch / mouse
+    // Touch / mouse — tap left/right zone to dodge that way
     this.input.on('pointerdown', (ptr) => {
       const sx = ptr.x;
       if (sx < WALL_X) {
-        // P1 side: left half → jump-left, right half → jump-right
-        this._jump(this.p1, sx < WALL_X / 2 ? -1 : 1);
+        this._move(this.p1, sx < WALL_X / 2 ? -1 : 1);
       } else {
-        // P2 side
         const mid = WALL_X + (W - WALL_X) / 2;
-        this._jump(this.p2, sx < mid ? -1 : 1);
+        this._move(this.p2, sx < mid ? -1 : 1);
       }
     });
 
     // Multi-touch support
     this.input.addPointer(3);
 
-    // Keyboard
+    // Keyboard: A/D for P1, Left/Right for P2
     this._keys = {
-      a: this.input.keyboard.addKey('A'),
-      d: this.input.keyboard.addKey('D'),
-      w: this.input.keyboard.addKey('W'),
+      a:     this.input.keyboard.addKey('A'),
+      d:     this.input.keyboard.addKey('D'),
       left:  this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT),
       right: this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT),
-      up:    this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.UP),
     };
   }
 
   _handleKeyboard() {
     const k = this._keys;
 
-    if (Phaser.Input.Keyboard.JustDown(k.a)) this._jump(this.p1, -1);
-    if (Phaser.Input.Keyboard.JustDown(k.d)) this._jump(this.p1,  1);
-    if (Phaser.Input.Keyboard.JustDown(k.w)) this._jump(this.p1,  0);
+    if (Phaser.Input.Keyboard.JustDown(k.a)) this._move(this.p1, -1);
+    if (Phaser.Input.Keyboard.JustDown(k.d)) this._move(this.p1,  1);
 
-    if (Phaser.Input.Keyboard.JustDown(k.left))  this._jump(this.p2, -1);
-    if (Phaser.Input.Keyboard.JustDown(k.right)) this._jump(this.p2,  1);
-    if (Phaser.Input.Keyboard.JustDown(k.up))    this._jump(this.p2,  0);
+    if (Phaser.Input.Keyboard.JustDown(k.left))  this._move(this.p2, -1);
+    if (Phaser.Input.Keyboard.JustDown(k.right)) this._move(this.p2,  1);
   }
 
-  _jump(p, dir) {
+  _move(p, dir) {
     if (p.stunned) return;
     const s = p.sprite;
-    const canJump = s.body.blocked.down || s.body.blocked.left || s.body.blocked.right;
-    if (!canJump) return;
-
-    s.setVelocityY(G.JUMP_VY);
-    if (dir !== 0) s.setVelocityX(dir * G.MOVE_VX);
-
-    // Dust particles
+    s.setVelocityX(dir * G.MOVE_VX);
     this.dustEmitter.setPosition(s.x, s.y + 14);
-    this.dustEmitter.explode(5);
+    this.dustEmitter.explode(3);
   }
 
   _land(p) {
@@ -360,10 +358,10 @@ class GameScene extends Phaser.Scene {
 
   _hitObstacle(p) {
     if (p.stunned) return;
-    p.stunned    = true;
-    p.stunTimer  = 1.2;
-    p.sprite.setVelocityY(250); // knocked back down
-    this.cameras.main.shake(180, 0.006);
+    p.stunned   = true;
+    p.stunTimer = 0.85;
+    p.sprite.setVelocityY(400); // knocked down; stun gravity takes over
+    this.cameras.main.shake(140, 0.005);
   }
 
   // ─── tether ─────────────────────────────────
@@ -371,22 +369,15 @@ class GameScene extends Phaser.Scene {
   _applyTether() {
     const s1 = this.p1.sprite;
     const s2 = this.p2.sprite;
-    const dy  = s2.y - s1.y; // positive = p2 is lower (behind)
+    const dy  = s2.y - s1.y; // positive = p2 is lower
 
-    // Tether model: rope goes over mountain peak.
-    // Enforce max Y-difference between climbers.
     if (Math.abs(dy) > G.TETHER_Y_MAX) {
-      const dir = dy > 0 ? 1 : -1; // +1 means p2 is lower
-      const excess = (Math.abs(dy) - G.TETHER_Y_MAX) * 0.5;
-
-      if (dir > 0) {
-        // p2 is lower → nudge p2 upward
-        s2.body.velocity.y -= G.TETHER_PULL;
-        s2.y -= excess * 0.4;
+      const excess = Math.abs(dy) - G.TETHER_Y_MAX;
+      // Direct position correction on the trailing player
+      if (dy > 0) {
+        s2.y -= excess * 0.35;
       } else {
-        // p1 is lower
-        s1.body.velocity.y -= G.TETHER_PULL;
-        s1.y -= excess * 0.4;
+        s1.y -= excess * 0.35;
       }
     }
   }
@@ -426,15 +417,16 @@ class GameScene extends Phaser.Scene {
   // ─── camera ─────────────────────────────────
 
   _updateCamera() {
-    // Follow the average Y, biased toward the higher (smaller Y) climber
-    const y1 = this.p1.sprite.y;
-    const y2 = this.p2.sprite.y;
-    const higher = Math.min(y1, y2);
-    const avg    = (y1 + y2) / 2;
-    const target = avg * 0.6 + higher * 0.4;
+    const dt = this.game.loop.delta / 1000;
 
-    this._camY = Phaser.Math.Linear(this._camY, target, 0.07);
-    this.cameras.main.scrollY = this._camY - G.H * 0.62;
+    // Accelerate scroll speed up to the cap
+    this.scrollSpeed = Math.min(G.SCROLL_MAX, this.scrollSpeed + G.SCROLL_ACCEL * dt);
+
+    // Scroll the camera upward
+    this.cameras.main.scrollY -= this.scrollSpeed * dt;
+
+    // Stop at world top (summit visible)
+    this.cameras.main.scrollY = Math.max(0, this.cameras.main.scrollY);
   }
 
   // ─── difficulty ──────────────────────────────
@@ -466,9 +458,13 @@ class GameScene extends Phaser.Scene {
       fontSize: '16px', fontFamily: 'monospace', color: '#ff5544',
     }).setScrollFactor(sf).setDepth(51).setOrigin(1, 0);
 
-    // Tether indicator in HUD centre
-    this.tetherLabel = this.add.text(W / 2, 8, '', {
-      fontSize: '14px', fontFamily: 'monospace', color: '#ddaa44',
+    // Centre: speed readout + tether warning
+    this.speedLabel = this.add.text(W / 2, 4, '', {
+      fontSize: '13px', fontFamily: 'monospace', color: '#888888',
+    }).setScrollFactor(sf).setDepth(51).setOrigin(0.5, 0);
+
+    this.tetherLabel = this.add.text(W / 2, 22, '', {
+      fontSize: '13px', fontFamily: 'monospace', color: '#ddaa44',
     }).setScrollFactor(sf).setDepth(51).setOrigin(0.5, 0);
 
     // Altitude progress bars (thin vertical strips on each edge)
@@ -496,6 +492,8 @@ class GameScene extends Phaser.Scene {
     const h2 = Math.max(0, Math.round((G.WORLD_H - this.p2.sprite.y) / 10));
     this.p1Label.setText(`P1  ${h1}m`);
     this.p2Label.setText(`P2  ${h2}m`);
+
+    this.speedLabel.setText(`${Math.round(this.scrollSpeed)}px/s`);
 
     const dy = Math.abs(this.p1.sprite.y - this.p2.sprite.y);
     if (dy > G.TETHER_Y_MAX * 0.72) {
