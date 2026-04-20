@@ -183,10 +183,10 @@ class GameScene extends Phaser.Scene {
       const leftX  = this._placePlatform('left',  y);
       const rightX = this._placePlatform('right', y);
 
-      // Obstacles scale with difficulty
-      const obsChance = 0.15 + diff * 0.12;
-      if (Math.random() < obsChance) this._addObstacleOn('left',  y, leftX);
-      if (Math.random() < obsChance) this._addObstacleOn('right', y, rightX);
+      // Obstacles scale with difficulty — fewer, flush with wall
+      const obsChance = 0.08 + diff * 0.05;
+      if (Math.random() < obsChance) this._addObstacleOn('left',  y);
+      if (Math.random() < obsChance) this._addObstacleOn('right', y);
     }
 
     this._nextPlatformY = y;
@@ -223,18 +223,24 @@ class GameScene extends Phaser.Scene {
     }
   }
 
-  _addObstacleOn(side, platY, platX) {
-    const { WALL_X, WALL_W, W, TILE } = G;
-    let x;
+  _addObstacleOn(side, y) {
+    const { WALL_X, WALL_W, TILE } = G;
+    // 1–2 tiles wide, flush against the wall face
+    const tiles = Phaser.Math.Between(1, 2);
+    const w = tiles * TILE;
+    const h = 18; // shorter than before
+
+    let cx;
     if (side === 'left') {
-      const maxX = WALL_X - WALL_W / 2 - TILE;
-      x = Phaser.Math.Between(Math.max(8, platX), Math.min(platX + 80, maxX));
+      // Right edge of obstacle == left edge of wall
+      cx = (WALL_X - WALL_W / 2) - w / 2;
     } else {
-      const minX = WALL_X + WALL_W / 2;
-      x = Phaser.Math.Between(Math.max(platX, minX), Math.min(platX + 80, W - TILE - 8));
+      // Left edge of obstacle == right edge of wall
+      cx = (WALL_X + WALL_W / 2) + w / 2;
     }
-    const obs = this.obstacles.create(x + TILE / 2, platY - TILE + 4, 'obstacle');
-    obs.setDisplaySize(TILE, 28).refreshBody().setDepth(4);
+
+    const obs = this.obstacles.create(cx, y - h / 2, 'obstacle');
+    obs.setDisplaySize(w, h).refreshBody().setDepth(4);
   }
 
   _maybeGenerate() {
@@ -298,12 +304,9 @@ class GameScene extends Phaser.Scene {
     // Horizontal friction
     s.body.velocity.x *= Math.pow(0.80, dt * 60);
 
-    // Rescue: player has fallen below camera bottom
-    const camBottom = this.cameras.main.scrollY + G.H + 60;
-    if (s.y > camBottom) {
-      s.y = camBottom - 30;
-      if (!p.stunned) { p.stunned = true; p.stunTimer = 0.6; }
-    }
+    // Off-screen bottom → game over
+    const camBottom = this.cameras.main.scrollY + G.H;
+    if (s.y > camBottom) this._playerFailed(p.num);
   }
 
   // ─── input ──────────────────────────────────
@@ -518,6 +521,15 @@ class GameScene extends Phaser.Scene {
   }
 
   // ─── win ────────────────────────────────────
+
+  _playerFailed(num) {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    this.cameras.main.shake(200, 0.01);
+    this.time.delayedCall(300, () => {
+      this.scene.start('GameOver', { loser: num });
+    });
+  }
 
   _win(playerNum) {
     if (this.gameOver) return;

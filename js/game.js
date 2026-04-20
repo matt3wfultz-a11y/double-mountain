@@ -17,6 +17,6 @@ window.addEventListener('load', () => {
       autoCenter: Phaser.Scale.CENTER_BOTH,
       parent: document.body,
     },
-    scene: [BootScene, MenuScene, GameScene, WinScene],
+    scene: [BootScene, MenuScene, GameScene, GameOverScene, WinScene],
   });
 });
