@@ -273,9 +273,7 @@ class GameScene extends Phaser.Scene {
       maxX: num === 1 ? G.WALL_X - G.WALL_W / 2 - 4 : G.W - 14,
       stunned: false,
       stunTimer: 0,
-      grounded: false,
-      // For landing detection
-      wasGrounded: false,
+      targetX: null,  // set by pointer/keyboard; drives lateral movement
     };
 
     return p;
@@ -301,8 +299,13 @@ class GameScene extends Phaser.Scene {
     if (s.x < p.minX) { s.x = p.minX; s.body.velocity.x = Math.max(0, s.body.velocity.x); }
     if (s.x > p.maxX) { s.x = p.maxX; s.body.velocity.x = Math.min(0, s.body.velocity.x); }
 
-    // Horizontal friction
-    s.body.velocity.x *= Math.pow(0.80, dt * 60);
+    // Drive toward touch/keyboard target; friction only when idle
+    if (p.targetX !== null && !p.stunned) {
+      const dx = p.targetX - s.x;
+      s.body.velocity.x = Math.abs(dx) > 5 ? Math.sign(dx) * G.MOVE_VX : 0;
+    } else {
+      s.body.velocity.x *= Math.pow(0.80, dt * 60);
+    }
 
     // Off-screen bottom → game over
     const camBottom = this.cameras.main.scrollY + G.H;
@@ -312,23 +315,33 @@ class GameScene extends Phaser.Scene {
   // ─── input ──────────────────────────────────
 
   _setupInput() {
-    const { WALL_X, W } = G;
-
-    // Touch / mouse — tap left/right zone to dodge that way
-    this.input.on('pointerdown', (ptr) => {
-      const sx = ptr.x;
-      if (sx < WALL_X) {
-        this._move(this.p1, sx < WALL_X / 2 ? -1 : 1);
-      } else {
-        const mid = WALL_X + (W - WALL_X) / 2;
-        this._move(this.p2, sx < mid ? -1 : 1);
-      }
-    });
-
-    // Multi-touch support
+    // Up to 4 simultaneous touches (both thumbs + extras)
     this.input.addPointer(3);
 
-    // Keyboard: A/D for P1, Left/Right for P2
+    // Track which pointer owns which player's side
+    this._ptrs = {}; // pointerId → 1 or 2
+
+    const assign = (ptr) => {
+      if (!ptr.isDown) return;
+      const side = ptr.x < G.WALL_X ? 1 : 2;
+      this._ptrs[ptr.id] = side;
+      const p = side === 1 ? this.p1 : this.p2;
+      // Clamp target to player's own lane in world-x (camera only scrolls Y)
+      p.targetX = Phaser.Math.Clamp(ptr.x, p.minX, p.maxX);
+    };
+
+    const release = (ptr) => {
+      const side = this._ptrs[ptr.id];
+      if (side === 1) this.p1.targetX = null;
+      if (side === 2) this.p2.targetX = null;
+      delete this._ptrs[ptr.id];
+    };
+
+    this.input.on('pointerdown', assign);
+    this.input.on('pointermove', assign);
+    this.input.on('pointerup',   release);
+
+    // Keyboard: hold A/D for P1, hold ←/→ for P2
     this._keys = {
       a:     this.input.keyboard.addKey('A'),
       d:     this.input.keyboard.addKey('D'),
@@ -340,19 +353,15 @@ class GameScene extends Phaser.Scene {
   _handleKeyboard() {
     const k = this._keys;
 
-    if (Phaser.Input.Keyboard.JustDown(k.a)) this._move(this.p1, -1);
-    if (Phaser.Input.Keyboard.JustDown(k.d)) this._move(this.p1,  1);
+    if (!this.p1.stunned) {
+      if      (k.a.isDown) this.p1.sprite.body.velocity.x = -G.MOVE_VX;
+      else if (k.d.isDown) this.p1.sprite.body.velocity.x =  G.MOVE_VX;
+    }
 
-    if (Phaser.Input.Keyboard.JustDown(k.left))  this._move(this.p2, -1);
-    if (Phaser.Input.Keyboard.JustDown(k.right)) this._move(this.p2,  1);
-  }
-
-  _move(p, dir) {
-    if (p.stunned) return;
-    const s = p.sprite;
-    s.setVelocityX(dir * G.MOVE_VX);
-    this.dustEmitter.setPosition(s.x, s.y + 14);
-    this.dustEmitter.explode(3);
+    if (!this.p2.stunned) {
+      if      (k.left.isDown)  this.p2.sprite.body.velocity.x = -G.MOVE_VX;
+      else if (k.right.isDown) this.p2.sprite.body.velocity.x =  G.MOVE_VX;
+    }
   }
 
   _land(p) {
